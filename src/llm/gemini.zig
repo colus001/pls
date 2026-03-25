@@ -6,6 +6,10 @@ const http_client = @import("http_client.zig");
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 
+/// Diagnostic message set by parseResponse when returning error.InvalidResponse.
+/// Read by agent.zig after stopping the spinner. Static string literal — no allocation.
+pub var last_parse_error: ?[]const u8 = null;
+
 /// Send a chat request to the Google Gemini API.
 /// When `base_url` is provided, it is used instead of the default Gemini URL
 /// (e.g. for proxy endpoints). When `api_key` is null, the `?key=` query
@@ -85,7 +89,10 @@ fn buildRequestBody(
 }
 
 pub fn parseResponse(allocator: Allocator, body: []const u8) !provider.ChatResponse {
+    last_parse_error = null;
+
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch {
+        last_parse_error = "response is not valid JSON";
         return error.JsonParseError;
     };
     defer parsed.deinit();
@@ -100,14 +107,40 @@ pub fn parseResponse(allocator: Allocator, body: []const u8) !provider.ChatRespo
     // Get candidates array
     const candidates = if (root.get("candidates")) |c| switch (c) {
         .array => |a| a,
-        else => return error.InvalidResponse,
-    } else return error.InvalidResponse;
+        else => {
+            last_parse_error = "'candidates' is not an array";
+            return error.InvalidResponse;
+        },
+    } else {
+        // Include finishReason hint when candidates is missing entirely
+        const reason = if (root.get("promptFeedback")) |pf| switch (pf) {
+            .object => |o| if (o.get("blockReason")) |br| switch (br) {
+                .string => |s| s,
+                else => null,
+            } else null,
+            else => null,
+        } else null;
+        last_parse_error = if (reason) |r|
+            if (std.mem.eql(u8, r, "SAFETY"))
+                "no candidates returned (blocked by safety filter)"
+            else
+                "no candidates returned (prompt blocked)"
+        else
+            "missing 'candidates' field";
+        return error.InvalidResponse;
+    };
 
-    if (candidates.items.len == 0) return error.InvalidResponse;
+    if (candidates.items.len == 0) {
+        last_parse_error = "empty 'candidates' array";
+        return error.InvalidResponse;
+    }
 
     const candidate = switch (candidates.items[0]) {
         .object => |o| o,
-        else => return error.InvalidResponse,
+        else => {
+            last_parse_error = "candidate is not an object";
+            return error.InvalidResponse;
+        },
     };
 
     // Parse finish reason
@@ -126,13 +159,32 @@ pub fn parseResponse(allocator: Allocator, body: []const u8) !provider.ChatRespo
     // Parse content -> parts
     const content_obj = if (candidate.get("content")) |c| switch (c) {
         .object => |o| o,
-        else => return error.InvalidResponse,
-    } else return error.InvalidResponse;
+        else => {
+            last_parse_error = "'content' is not an object";
+            return error.InvalidResponse;
+        },
+    } else {
+        // finishReason often explains why content is missing
+        if (std.mem.eql(u8, finish_str, "SAFETY")) {
+            last_parse_error = "no content returned (blocked by safety filter)";
+        } else if (std.mem.eql(u8, finish_str, "RECITATION")) {
+            last_parse_error = "no content returned (blocked for recitation)";
+        } else {
+            last_parse_error = "missing 'content' in candidate (finishReason: see API response)";
+        }
+        return error.InvalidResponse;
+    };
 
-    const parts_val = content_obj.get("parts") orelse return error.InvalidResponse;
+    const parts_val = content_obj.get("parts") orelse {
+        last_parse_error = "missing 'parts' in content";
+        return error.InvalidResponse;
+    };
     const parts = switch (parts_val) {
         .array => |a| a,
-        else => return error.InvalidResponse,
+        else => {
+            last_parse_error = "'parts' is not an array";
+            return error.InvalidResponse;
+        },
     };
 
     var content_blocks: std.ArrayList(provider.ContentBlock) = .empty;
@@ -284,6 +336,7 @@ test "parseResponse malformed JSON" {
     const a = std.testing.allocator;
     const result = parseResponse(a, "not json");
     try std.testing.expectError(error.JsonParseError, result);
+    try std.testing.expectEqualStrings("response is not valid JSON", last_parse_error.?);
 }
 
 test "parseResponse empty candidates" {
@@ -293,6 +346,27 @@ test "parseResponse empty candidates" {
     ;
     const result = parseResponse(a, body);
     try std.testing.expectError(error.InvalidResponse, result);
+    try std.testing.expectEqualStrings("empty 'candidates' array", last_parse_error.?);
+}
+
+test "parseResponse missing content sets diagnostic" {
+    const a = std.testing.allocator;
+    const body =
+        \\{"candidates":[{"finishReason":"SAFETY"}]}
+    ;
+    const result = parseResponse(a, body);
+    try std.testing.expectError(error.InvalidResponse, result);
+    try std.testing.expectEqualStrings("no content returned (blocked by safety filter)", last_parse_error.?);
+}
+
+test "parseResponse missing candidates sets diagnostic" {
+    const a = std.testing.allocator;
+    const body =
+        \\{"promptFeedback":{"blockReason":"SAFETY"}}
+    ;
+    const result = parseResponse(a, body);
+    try std.testing.expectError(error.InvalidResponse, result);
+    try std.testing.expectEqualStrings("no candidates returned (blocked by safety filter)", last_parse_error.?);
 }
 
 test "parseResponse MAX_TOKENS finish reason" {

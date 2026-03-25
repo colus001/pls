@@ -4,6 +4,12 @@ const provider = @import("provider.zig");
 const gemini = @import("gemini.zig");
 const json_helpers = @import("json_helpers.zig");
 
+/// Raw HTTP response body from the last failed API call.
+/// Stored as an owned allocation so the agent can print it after stopping
+/// the spinner (avoids race condition with spinner thread on stderr).
+/// Caller must free with the same allocator passed to chat().
+pub var last_error_body: ?[]const u8 = null;
+
 /// Send a chat request to the pls proxy.
 /// The proxy injects the Gemini API key server-side; no API key is required.
 /// On success, ChatResponse.rate_limit is populated from X-RateLimit-* headers
@@ -17,6 +23,12 @@ pub fn chat(
     tools: []const provider.Tool,
     proxy_url: []const u8,
 ) !provider.ChatResponse {
+    // Clear stale diagnostic from a previous call
+    if (last_error_body) |prev| {
+        allocator.free(prev);
+        last_error_body = null;
+    }
+
     const body = try buildRequestBody(allocator, system_prompt, messages, tools);
     defer allocator.free(body);
 
@@ -102,7 +114,11 @@ pub fn chat(
     const stderr = std.fs.File.stderr().deprecatedWriter();
 
     if (status == .ok) {
-        var chat_response = try gemini.parseResponse(allocator, resp_body);
+        var chat_response = gemini.parseResponse(allocator, resp_body) catch |err| {
+            // Save a copy of the body for later diagnostic output
+            last_error_body = allocator.dupe(u8, resp_body) catch null;
+            return err;
+        };
 
         // Attach rate limit info when all six headers are present
         if (rl_remaining_burst != null and rl_limit_burst != null and

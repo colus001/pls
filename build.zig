@@ -13,6 +13,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    exe.root_module.addAnonymousImport("build_info", .{
+        .root_source_file = b.path("build.zig.zon"),
+    });
+
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the CLI");

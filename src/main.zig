@@ -3,8 +3,10 @@ const config_mod = @import("config.zig");
 const agent_mod = @import("agent.zig");
 const init_mod = @import("init.zig");
 const config_editor = @import("config_editor.zig");
+const build_info = @import("build_info");
+const http_client = @import("llm/http_client.zig");
 
-const VERSION = "0.2.1";
+const VERSION = build_info.version;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -44,6 +46,12 @@ pub fn main() !void {
 
         if (std.mem.eql(u8, arg, "init")) {
             try init_mod.runSetup(allocator);
+            return;
+        } else if (std.mem.eql(u8, arg, "usage") and i + 1 < args.len and std.mem.eql(u8, args[i + 1], "reset")) {
+            try resetUsage(allocator, stdout, stderr);
+            return;
+        } else if (std.mem.eql(u8, arg, "usage")) {
+            try checkUsage(allocator, stdout, stderr);
             return;
         } else if (std.mem.eql(u8, arg, "config") and i + 1 < args.len and std.mem.eql(u8, args[i + 1], "show")) {
             try showConfig(allocator, stdout, stderr);
@@ -212,9 +220,225 @@ fn runTask(
             error.HttpError => try stderr.writeAll("Failed to connect to the LLM API. Check your network.\n"),
             error.ApiError => try stderr.writeAll("The LLM API returned an error. Check your API key and model.\n"),
             error.RateLimited => {}, // message already printed by proxy.zig
+            error.InvalidResponse => try stderr.writeAll("The API returned an unexpected response format. See above for details.\n"),
+            error.JsonParseError => try stderr.writeAll("Failed to parse the API response. See above for details.\n"),
             else => {},
         }
     };
+}
+
+fn checkUsage(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !void {
+    var cfg = config_mod.load(allocator) catch |err| {
+        try stderr.print("Error loading config: {}\n", .{err});
+        try stderr.writeAll("Run `pls init` to set up your configuration.\n");
+        return;
+    };
+    defer cfg.deinit();
+
+    if (cfg.provider != .proxy) {
+        try stderr.print("Rate limit usage is only available for the free proxy (current provider: {s}).\n", .{cfg.provider.toString()});
+        return;
+    }
+
+    const url = try std.fmt.allocPrint(allocator, "{s}/v1/rate-limit", .{cfg.proxy_url});
+    defer allocator.free(url);
+
+    // Fetch proxy version (best-effort; failure is non-fatal)
+    const version_url = try std.fmt.allocPrint(allocator, "{s}/v1/version", .{cfg.proxy_url});
+    defer allocator.free(version_url);
+    const proxy_version: ?[]const u8 = http_client.get(allocator, version_url, &.{}) catch null;
+    defer if (proxy_version) |v| allocator.free(v);
+
+    const body = http_client.get(allocator, url, &.{}) catch |err| {
+        switch (err) {
+            error.HttpError => try stderr.print("Failed to connect to proxy: {s}\n", .{cfg.proxy_url}),
+            error.ApiError => try stderr.writeAll("Proxy returned an error.\n"),
+            else => try stderr.print("Error: {}\n", .{err}),
+        }
+        return;
+    };
+    defer allocator.free(body);
+
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch {
+        try stderr.writeAll("Failed to parse rate limit response.\n");
+        return;
+    };
+    defer parsed.deinit();
+
+    const root = switch (parsed.value) {
+        .object => |o| o,
+        else => {
+            try stderr.writeAll("Unexpected response format.\n");
+            return;
+        },
+    };
+
+    // Extract the three tier objects
+    const burst = if (root.get("burst")) |v| switch (v) {
+        .object => |o| o,
+        else => null,
+    } else null;
+    const hourly = if (root.get("hourly")) |v| switch (v) {
+        .object => |o| o,
+        else => null,
+    } else null;
+    const daily = if (root.get("daily")) |v| switch (v) {
+        .object => |o| o,
+        else => null,
+    } else null;
+
+    if (burst == null or hourly == null or daily == null) {
+        try stderr.writeAll("Incomplete rate limit response.\n");
+        return;
+    }
+
+    const ip = if (root.get("ip")) |v| switch (v) {
+        .string => |s| s,
+        else => "unknown",
+    } else "unknown";
+
+    try stdout.writeAll("\n");
+    if (proxy_version) |v| {
+        const ver = std.mem.trim(u8, v, " \t\r\n");
+        try stdout.print("  pls proxy usage  (v{s} \xc2\xb7 {s})\n", .{ ver, ip });
+    } else {
+        try stdout.print("  pls proxy usage  ({s})\n", .{ip});
+    }
+    try stdout.writeAll("  ----------------\n");
+
+    try printUsageTier(stdout, allocator, "burst ", burst.?);
+    try printUsageTier(stdout, allocator, "hourly", hourly.?);
+    try printUsageTier(stdout, allocator, "daily ", daily.?);
+
+    try stdout.writeAll("\n");
+}
+
+fn resetUsage(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !void {
+    var cfg = config_mod.load(allocator) catch |err| {
+        try stderr.print("Error loading config: {}\n", .{err});
+        return;
+    };
+    defer cfg.deinit();
+
+    if (cfg.provider != .proxy) {
+        try stderr.print("Rate limit reset is only available for the free proxy (current provider: {s}).\n", .{cfg.provider.toString()});
+        return;
+    }
+
+    // Require admin key from config or ADMIN_KEY env var
+    const admin_key = cfg.admin_key orelse {
+        try stderr.writeAll("Admin key is not configured. Set admin_key in config or ADMIN_KEY env var.\n");
+        return;
+    };
+
+    // Fetch current IP from /v1/rate-limit
+    const info_url = try std.fmt.allocPrint(allocator, "{s}/v1/rate-limit", .{cfg.proxy_url});
+    defer allocator.free(info_url);
+
+    const info_body = http_client.get(allocator, info_url, &.{}) catch |err| {
+        switch (err) {
+            error.HttpError => try stderr.print("Failed to connect to proxy: {s}\n", .{cfg.proxy_url}),
+            else => try stderr.writeAll("Failed to fetch current rate limit info.\n"),
+        }
+        return;
+    };
+    defer allocator.free(info_body);
+
+    const info_parsed = std.json.parseFromSlice(std.json.Value, allocator, info_body, .{}) catch {
+        try stderr.writeAll("Failed to parse rate limit response.\n");
+        return;
+    };
+    defer info_parsed.deinit();
+
+    const ip = blk: {
+        const root = switch (info_parsed.value) {
+            .object => |o| o,
+            else => break :blk "unknown",
+        };
+        break :blk if (root.get("ip")) |v| switch (v) {
+            .string => |s| s,
+            else => "unknown",
+        } else "unknown";
+    };
+
+    if (std.mem.eql(u8, ip, "unknown")) {
+        try stderr.writeAll("Could not determine current IP from proxy.\n");
+        return;
+    }
+
+    // Build Authorization header
+    const auth_value = try std.fmt.allocPrint(allocator, "Bearer {s}", .{admin_key});
+    defer allocator.free(auth_value);
+
+    const headers = [_]std.http.Header{
+        .{ .name = "authorization", .value = auth_value },
+    };
+
+    // DELETE /v1/rate-limit/:ip
+    const delete_url = try std.fmt.allocPrint(allocator, "{s}/v1/rate-limit/{s}", .{ cfg.proxy_url, ip });
+    defer allocator.free(delete_url);
+
+    _ = http_client.delete(allocator, delete_url, &headers) catch |err| {
+        switch (err) {
+            error.HttpError => try stderr.print("Failed to connect to proxy: {s}\n", .{cfg.proxy_url}),
+            error.ApiError => try stderr.writeAll("Reset failed. Check your PLS_ADMIN_KEY.\n"),
+            else => try stderr.print("Error: {}\n", .{err}),
+        }
+        return;
+    };
+
+    try stdout.print("Rate limit reset for {s}.\n", .{ip});
+}
+
+fn getJsonInt(obj: std.json.ObjectMap, key: []const u8) ?i64 {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .integer => |n| n,
+        .float => |f| @intFromFloat(f),
+        else => null,
+    };
+}
+
+fn printUsageTier(stdout: anytype, allocator: std.mem.Allocator, label: []const u8, obj: std.json.ObjectMap) !void {
+    const used = getJsonInt(obj, "used") orelse 0;
+    const limit = getJsonInt(obj, "limit") orelse 0;
+    const remaining = getJsonInt(obj, "remaining") orelse 0;
+    const reset_secs = getJsonInt(obj, "reset_after_seconds") orelse 0;
+
+    const reset_str = try formatSeconds(allocator, @intCast(@max(reset_secs, 0)));
+    defer allocator.free(reset_str);
+
+    // Colour the used/limit portion: green when healthy, yellow near limit, red at limit
+    const color: []const u8 = if (limit > 0 and remaining == 0)
+        "\x1b[31m" // red — exhausted
+    else if (limit > 0 and remaining * 5 <= limit)
+        "\x1b[33m" // yellow — ≤20% left
+    else
+        "\x1b[32m"; // green — healthy
+    const reset_color = "\x1b[0m";
+
+    try stdout.print("  {s}  {s}{d}/{d}{s}  ({d} remaining, resets in {s})\n", .{
+        label,
+        color,
+        used,
+        limit,
+        reset_color,
+        remaining,
+        reset_str,
+    });
+}
+
+fn formatSeconds(allocator: std.mem.Allocator, secs: u64) ![]const u8 {
+    const h = secs / 3600;
+    const m = (secs % 3600) / 60;
+    const s = secs % 60;
+    if (h > 0) {
+        return std.fmt.allocPrint(allocator, "{d}h {d}m", .{ h, m });
+    } else if (m > 0) {
+        return std.fmt.allocPrint(allocator, "{d}m {d}s", .{ m, s });
+    } else {
+        return std.fmt.allocPrint(allocator, "{d}s", .{s});
+    }
 }
 
 fn showConfig(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !void {
@@ -248,6 +472,15 @@ fn showConfig(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !v
             try stdout.print("  ollama_host   = {s}\n", .{cfg.ollama_host});
         } else {
             try stdout.writeAll("  api_key       = (not set)\n");
+        }
+    }
+
+    // Show admin_key masked (only when set)
+    if (cfg.admin_key) |k| {
+        if (k.len > 8) {
+            try stdout.print("  admin_key     = {s}...{s}\n", .{ k[0..4], k[k.len - 4 ..] });
+        } else if (k.len > 0) {
+            try stdout.writeAll("  admin_key     = ****\n");
         }
     }
 
@@ -304,6 +537,7 @@ fn printUsage(out: anytype) !void {
         \\  Usage:
         \\    pls <task>              Run a natural language task
         \\    pls init                Interactive setup wizard
+        \\    pls usage               Show proxy rate limit usage
         \\    pls config              Interactive config editor
         \\    pls config show         Show active configuration
         \\    pls config reset        Reset configuration to defaults

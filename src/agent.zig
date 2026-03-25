@@ -211,9 +211,23 @@ pub const Agent = struct {
             errdefer spinner.stop();
             var response = self.callLlm() catch |err| {
                 spinner.stop();
+                // Print diagnostic details now that the spinner is stopped.
+                // Provider code cannot safely write to stderr while the spinner
+                // thread is running, so diagnostic info is stashed and printed here.
+                if (gemini.last_parse_error) |detail| {
+                    try self.stderr.print("Gemini: {s}\n", .{detail});
+                    gemini.last_parse_error = null;
+                }
+                if (proxy.last_error_body) |body| {
+                    try self.stderr.print("Response body: {s}\n", .{body});
+                    self.allocator.free(body);
+                    proxy.last_error_body = null;
+                }
                 return err;
             };
             spinner.stop();
+            // Free response on any error path; normal paths call deinit() explicitly below.
+            errdefer response.deinit(self.allocator);
 
             // Warn when any rate limit tier is at or below 20% remaining
             if (response.rate_limit) |rl| {
@@ -267,7 +281,15 @@ pub const Agent = struct {
                 switch (block) {
                     .tool_call => |tc| {
                         if (std.mem.eql(u8, tc.name, "ask_user")) {
-                            const result = try self.executeAskUserTool(tc.arguments);
+                            const result = self.executeAskUserTool(tc.arguments) catch {
+                                const tool_msg = try provider.Message.toolResult(
+                                    self.allocator,
+                                    tc.id,
+                                    "Error: could not parse ask_user arguments.",
+                                );
+                                try self.messages.append(self.allocator, tool_msg);
+                                continue;
+                            };
                             defer self.allocator.free(result);
 
                             const tool_msg = try provider.Message.toolResult(
@@ -471,10 +493,20 @@ pub const Agent = struct {
     }
 
     fn executeAskUserTool(self: *Agent, arguments_json: []const u8) ![]const u8 {
-        const question = try extractJsonString(self.allocator, arguments_json, "question");
+        const question = extractJsonString(self.allocator, arguments_json, "question") catch {
+            return self.allocator.dupe(u8, "Error: could not parse 'question' from arguments.");
+        };
         defer self.allocator.free(question);
 
-        const options_json = try extractJsonString(self.allocator, arguments_json, "options");
+        const options_json = extractJsonString(self.allocator, arguments_json, "options") catch {
+            // options missing — fall back to a simple yes/no prompt
+            if (self.options.dry_run) {
+                try self.stderr.print("  [dry-run] Would ask: {s}\n", .{question});
+                return self.allocator.dupe(u8, "yes");
+            }
+            const answer = try confirm.askUser(self.allocator, question, &.{}, null);
+            return answer;
+        };
         defer self.allocator.free(options_json);
 
         // Parse the recommended index (optional)

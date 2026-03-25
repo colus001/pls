@@ -80,6 +80,10 @@ pub const Config = struct {
     ollama_host: []const u8 = "http://localhost:11434",
     ollama_model: []const u8 = models.DEFAULT_OLLAMA_MODEL,
 
+    /// Admin key for proxy management endpoints (e.g. rate-limit reset).
+    /// Set via config file or ADMIN_KEY env var.
+    admin_key: ?[]const u8 = null,
+
     allocator: Allocator,
 
     /// Strings allocated by config loading that need to be freed.
@@ -166,6 +170,8 @@ pub const Config = struct {
             self.ollama_host = try self.ownString(value);
         } else if (std.mem.eql(u8, key, "ollama_model")) {
             self.ollama_model = try self.ownString(value);
+        } else if (std.mem.eql(u8, key, "admin_key")) {
+            self.admin_key = try self.ownString(value);
         }
     }
 };
@@ -279,6 +285,9 @@ fn applyEnvOverrides(cfg: *Config) !void {
     }
     if (std.posix.getenv("OLLAMA_MODEL")) |v| {
         cfg.ollama_model = try cfg.ownString(v);
+    }
+    if (std.posix.getenv("ADMIN_KEY")) |v| {
+        cfg.admin_key = try cfg.ownString(v);
     }
 }
 
