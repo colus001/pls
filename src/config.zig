@@ -23,12 +23,14 @@ pub const ConfirmMode = enum {
 };
 
 pub const Provider = enum {
+    proxy,
     anthropic,
     openai,
     gemini,
     ollama,
 
     pub fn fromString(s: []const u8) ?Provider {
+        if (std.mem.eql(u8, s, "proxy")) return .proxy;
         if (std.mem.eql(u8, s, "anthropic")) return .anthropic;
         if (std.mem.eql(u8, s, "openai")) return .openai;
         if (std.mem.eql(u8, s, "gemini")) return .gemini;
@@ -38,17 +40,32 @@ pub const Provider = enum {
 
     pub fn toString(self: Provider) []const u8 {
         return switch (self) {
+            .proxy => "proxy",
             .anthropic => "anthropic",
             .openai => "openai",
             .gemini => "gemini",
             .ollama => "ollama",
         };
     }
+
+    /// Returns true if this provider requires an API key.
+    pub fn requiresApiKey(self: Provider) bool {
+        return switch (self) {
+            .proxy, .ollama => false,
+            .anthropic, .openai, .gemini => true,
+        };
+    }
 };
 
+pub const DEFAULT_PROXY_URL = "https://pls-proxy.seokjun.kim";
+pub const DEFAULT_PROXY_MODEL = "gemini-3-flash-preview";
+
 pub const Config = struct {
-    provider: Provider = .anthropic,
+    provider: Provider = .proxy,
     confirm_mode: ConfirmMode = .all,
+
+    proxy_url: []const u8 = DEFAULT_PROXY_URL,
+    proxy_model: []const u8 = DEFAULT_PROXY_MODEL,
 
     anthropic_api_key: ?[]const u8 = null,
     anthropic_model: []const u8 = "claude-sonnet-4-5-20250514",
@@ -83,6 +100,7 @@ pub const Config = struct {
     /// Get the active API key for the current provider.
     pub fn getApiKey(self: *const Config) ?[]const u8 {
         return switch (self.provider) {
+            .proxy => null,
             .anthropic => self.anthropic_api_key,
             .openai => self.openai_api_key,
             .gemini => self.gemini_api_key,
@@ -93,6 +111,7 @@ pub const Config = struct {
     /// Get the active model for the current provider.
     pub fn getModel(self: *const Config) []const u8 {
         return switch (self.provider) {
+            .proxy => self.proxy_model,
             .anthropic => self.anthropic_model,
             .openai => self.openai_model,
             .gemini => self.gemini_model,
@@ -103,6 +122,7 @@ pub const Config = struct {
     /// Get the base URL for the current provider.
     pub fn getBaseUrl(self: *const Config) []const u8 {
         return switch (self.provider) {
+            .proxy => self.proxy_url,
             .anthropic => "https://api.anthropic.com",
             .openai => "https://api.openai.com",
             .gemini => "https://generativelanguage.googleapis.com",
@@ -125,6 +145,10 @@ pub const Config = struct {
             if (ConfirmMode.fromString(value)) |m| {
                 self.confirm_mode = m;
             }
+        } else if (std.mem.eql(u8, key, "proxy_url")) {
+            self.proxy_url = try self.ownString(value);
+        } else if (std.mem.eql(u8, key, "proxy_model")) {
+            self.proxy_model = try self.ownString(value);
         } else if (std.mem.eql(u8, key, "anthropic_api_key")) {
             self.anthropic_api_key = try self.ownString(value);
         } else if (std.mem.eql(u8, key, "anthropic_model")) {
@@ -234,6 +258,12 @@ fn applyEnvOverrides(cfg: *Config) !void {
             cfg.confirm_mode = m;
         }
     }
+    if (std.posix.getenv("PLS_PROXY_URL")) |v| {
+        cfg.proxy_url = try cfg.ownString(v);
+    }
+    if (std.posix.getenv("PLS_PROXY_MODEL")) |v| {
+        cfg.proxy_model = try cfg.ownString(v);
+    }
     if (std.posix.getenv("ANTHROPIC_API_KEY")) |v| {
         cfg.anthropic_api_key = try cfg.ownString(v);
     }
@@ -274,6 +304,7 @@ test "ConfirmMode round-trip" {
 }
 
 test "Provider.fromString returns correct variants" {
+    try std.testing.expectEqual(Provider.proxy, Provider.fromString("proxy").?);
     try std.testing.expectEqual(Provider.anthropic, Provider.fromString("anthropic").?);
     try std.testing.expectEqual(Provider.openai, Provider.fromString("openai").?);
     try std.testing.expectEqual(Provider.gemini, Provider.fromString("gemini").?);
@@ -287,7 +318,7 @@ test "Provider.fromString returns null for unknown" {
 }
 
 test "Provider round-trip" {
-    inline for (.{ Provider.anthropic, Provider.openai, Provider.gemini, Provider.ollama }) |p| {
+    inline for (.{ Provider.proxy, Provider.anthropic, Provider.openai, Provider.gemini, Provider.ollama }) |p| {
         try std.testing.expectEqual(p, Provider.fromString(p.toString()).?);
     }
 }
@@ -296,8 +327,10 @@ test "Config defaults" {
     var cfg = Config.init(std.testing.allocator);
     defer cfg.deinit();
 
-    try std.testing.expectEqual(Provider.anthropic, cfg.provider);
+    try std.testing.expectEqual(Provider.proxy, cfg.provider);
     try std.testing.expectEqual(ConfirmMode.all, cfg.confirm_mode);
+    try std.testing.expectEqualStrings(DEFAULT_PROXY_URL, cfg.proxy_url);
+    try std.testing.expectEqualStrings(DEFAULT_PROXY_MODEL, cfg.proxy_model);
     try std.testing.expect(cfg.anthropic_api_key == null);
     try std.testing.expect(cfg.openai_api_key == null);
     try std.testing.expect(cfg.gemini_api_key == null);
@@ -327,11 +360,17 @@ test "Config.getApiKey dispatches by provider" {
 
     cfg.provider = .ollama;
     try std.testing.expect(cfg.getApiKey() == null);
+
+    cfg.provider = .proxy;
+    try std.testing.expect(cfg.getApiKey() == null);
 }
 
 test "Config.getModel dispatches by provider" {
     var cfg = Config.init(std.testing.allocator);
     defer cfg.deinit();
+
+    cfg.provider = .proxy;
+    try std.testing.expectEqualStrings(DEFAULT_PROXY_MODEL, cfg.getModel());
 
     cfg.provider = .anthropic;
     try std.testing.expectEqualStrings("claude-sonnet-4-5-20250514", cfg.getModel());
@@ -472,6 +511,14 @@ pub fn save(cfg: *const Config, allocator: Allocator) !void {
     try writer.print("# Generated by `pls init`\n\n", .{});
     try writer.print("provider = \"{s}\"\n", .{cfg.provider.toString()});
     try writer.print("confirm_mode = \"{s}\"\n\n", .{cfg.confirm_mode.toString()});
+
+    // Proxy settings (only write if non-default)
+    if (!std.mem.eql(u8, cfg.proxy_url, DEFAULT_PROXY_URL)) {
+        try writer.print("proxy_url = \"{s}\"\n", .{cfg.proxy_url});
+    }
+    if (!std.mem.eql(u8, cfg.proxy_model, DEFAULT_PROXY_MODEL)) {
+        try writer.print("proxy_model = \"{s}\"\n", .{cfg.proxy_model});
+    }
 
     if (cfg.anthropic_api_key) |key| {
         try writer.print("anthropic_api_key = \"{s}\"\n", .{key});

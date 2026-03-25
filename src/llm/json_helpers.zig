@@ -157,10 +157,12 @@ pub fn buildOpenAIMessagesJson(allocator: Allocator, system_prompt: []const u8, 
                 switch (block) {
                     .tool_call => |tc| {
                         if (tc_idx > 0) try w.writeAll(",");
-                        try w.print("{{\"id\":\"{s}\",\"type\":\"function\",\"function\":{{\"name\":\"{s}\",\"arguments\":{s}}}}}", .{
+                        const escaped_args = try escapeJsonString(allocator, tc.arguments);
+                        defer allocator.free(escaped_args);
+                        try w.print("{{\"id\":\"{s}\",\"type\":\"function\",\"function\":{{\"name\":\"{s}\",\"arguments\":\"{s}\"}}}}", .{
                             tc.id,
                             tc.name,
-                            tc.arguments,
+                            escaped_args,
                         });
                         tc_idx += 1;
                     },
@@ -508,6 +510,8 @@ test "buildOpenAIMessagesJson assistant with tool call" {
     try std.testing.expect(std.mem.indexOf(u8, r, "\"tool_calls\":[") != null);
     try std.testing.expect(std.mem.indexOf(u8, r, "\"name\":\"run_shell\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, r, "\"id\":\"call-1\"") != null);
+    // arguments must be a JSON-encoded string, not a raw object (required by Ollama)
+    try std.testing.expect(std.mem.indexOf(u8, r, "\"arguments\":\"{") != null);
 }
 
 test "buildOpenAIMessagesJson tool result" {

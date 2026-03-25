@@ -4,24 +4,39 @@ const provider = @import("provider.zig");
 const json_helpers = @import("json_helpers.zig");
 const http_client = @import("http_client.zig");
 
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+
 /// Send a chat request to the Google Gemini API.
+/// When `base_url` is provided, it is used instead of the default Gemini URL
+/// (e.g. for proxy endpoints). When `api_key` is null, the `?key=` query
+/// parameter is omitted (the proxy injects it server-side).
 pub fn chat(
     allocator: Allocator,
-    api_key: []const u8,
+    api_key: ?[]const u8,
     model: []const u8,
     system_prompt: []const u8,
     messages: []const provider.Message,
     tools: []const provider.Tool,
+    base_url: ?[]const u8,
 ) !provider.ChatResponse {
     const body = try buildRequestBody(allocator, system_prompt, messages, tools);
     defer allocator.free(body);
 
-    // Gemini uses the API key as a query parameter
-    const url = try std.fmt.allocPrint(
-        allocator,
-        "https://generativelanguage.googleapis.com/v1beta/models/{s}:generateContent?key={s}",
-        .{ model, api_key },
-    );
+    const base = base_url orelse GEMINI_BASE_URL;
+
+    // Build URL: append ?key= only when an API key is provided
+    const url = if (api_key) |key|
+        try std.fmt.allocPrint(
+            allocator,
+            "{s}/v1beta/models/{s}:generateContent?key={s}",
+            .{ base, model, key },
+        )
+    else
+        try std.fmt.allocPrint(
+            allocator,
+            "{s}/v1beta/models/{s}:generateContent",
+            .{ base, model },
+        );
     defer allocator.free(url);
 
     const headers = [_]std.http.Header{

@@ -100,22 +100,25 @@ fn maskKey(key: ?[]const u8) []const u8 {
 
 fn editProvider(cfg: *config_mod.Config, stdin: anytype, out: anytype) !bool {
     try out.writeAll("\n  Select provider:\n");
-    try out.print("    \x1b[1m1\x1b[0m) anthropic{s}\n", .{if (cfg.provider == .anthropic) " (current)" else ""});
-    try out.print("    \x1b[1m2\x1b[0m) openai{s}\n", .{if (cfg.provider == .openai) " (current)" else ""});
-    try out.print("    \x1b[1m3\x1b[0m) gemini{s}\n", .{if (cfg.provider == .gemini) " (current)" else ""});
-    try out.print("    \x1b[1m4\x1b[0m) ollama{s}\n\n", .{if (cfg.provider == .ollama) " (current)" else ""});
+    try out.print("    \x1b[1m1\x1b[0m) proxy (free tier){s}\n", .{if (cfg.provider == .proxy) " (current)" else ""});
+    try out.print("    \x1b[1m2\x1b[0m) anthropic{s}\n", .{if (cfg.provider == .anthropic) " (current)" else ""});
+    try out.print("    \x1b[1m3\x1b[0m) openai{s}\n", .{if (cfg.provider == .openai) " (current)" else ""});
+    try out.print("    \x1b[1m4\x1b[0m) gemini{s}\n", .{if (cfg.provider == .gemini) " (current)" else ""});
+    try out.print("    \x1b[1m5\x1b[0m) ollama{s}\n\n", .{if (cfg.provider == .ollama) " (current)" else ""});
     try out.writeAll("  Choice: ");
 
     const choice = try readLine(stdin);
     if (choice.len == 0) return false;
 
     const new_provider: config_mod.Provider = if (std.mem.eql(u8, choice, "1"))
-        .anthropic
+        .proxy
     else if (std.mem.eql(u8, choice, "2"))
-        .openai
+        .anthropic
     else if (std.mem.eql(u8, choice, "3"))
-        .gemini
+        .openai
     else if (std.mem.eql(u8, choice, "4"))
+        .gemini
+    else if (std.mem.eql(u8, choice, "5"))
         .ollama
     else {
         try out.writeAll("  Invalid choice.\n");
@@ -163,6 +166,10 @@ fn editConfirmMode(cfg: *config_mod.Config, stdin: anytype, out: anytype) !bool 
 
 fn editActiveModel(cfg: *config_mod.Config, stdin: anytype, out: anytype) !bool {
     return switch (cfg.provider) {
+        .proxy => editModelMenu(cfg, .proxy_model, "proxy", &[_][]const u8{
+            "gemini-3-flash-preview",
+            "gemini-2.5-flash-lite",
+        }, cfg.proxy_model, stdin, out),
         .anthropic => editModelMenu(cfg, .anthropic_model, "anthropic", &[_][]const u8{
             "claude-sonnet-4-5-20250514",
             "claude-opus-4-5-20250514",
@@ -188,6 +195,7 @@ fn editActiveModel(cfg: *config_mod.Config, stdin: anytype, out: anytype) !bool 
 }
 
 const StringField = enum {
+    proxy_model,
     anthropic_model,
     openai_model,
     gemini_model,
@@ -263,6 +271,7 @@ fn editApiKey(
 
     const owned = try cfg.ownString(key);
     switch (provider) {
+        .proxy => {}, // Proxy doesn't use API keys
         .anthropic => cfg.anthropic_api_key = owned,
         .openai => cfg.openai_api_key = owned,
         .gemini => cfg.gemini_api_key = owned,
@@ -294,6 +303,7 @@ fn editFreeText(
 
 fn setStringField(cfg: *config_mod.Config, comptime field: StringField, value: []const u8) void {
     switch (field) {
+        .proxy_model => cfg.proxy_model = value,
         .anthropic_model => cfg.anthropic_model = value,
         .openai_model => cfg.openai_model = value,
         .gemini_model => cfg.gemini_model = value,

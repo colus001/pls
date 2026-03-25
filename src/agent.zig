@@ -118,6 +118,45 @@ const TOOLS = [_]provider.Tool{
     },
 };
 
+/// A terminal spinner that shows a rotating animation while waiting for LLM responses.
+const Spinner = struct {
+    running: std.atomic.Value(bool),
+    thread: ?std.Thread,
+
+    const FRAMES = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+    const INTERVAL_NS = 80 * std.time.ns_per_ms;
+
+    pub fn init() Spinner {
+        return .{
+            .running = std.atomic.Value(bool).init(false),
+            .thread = null,
+        };
+    }
+
+    pub fn start(self: *Spinner) void {
+        self.running.store(true, .seq_cst);
+        self.thread = std.Thread.spawn(.{}, run, .{self}) catch null;
+    }
+
+    pub fn stop(self: *Spinner) void {
+        self.running.store(false, .seq_cst);
+        if (self.thread) |t| t.join();
+        self.thread = null;
+    }
+
+    fn run(self: *Spinner) void {
+        const stderr = std.fs.File.stderr().deprecatedWriter();
+        var i: usize = 0;
+        while (self.running.load(.seq_cst)) {
+            stderr.print("\r\x1b[90m{s} Thinking...\x1b[0m", .{FRAMES[i % FRAMES.len]}) catch {};
+            i +%= 1;
+            std.Thread.sleep(INTERVAL_NS);
+        }
+        // Clear the spinner line
+        stderr.writeAll("\r\x1b[K") catch {};
+    }
+};
+
 pub const AgentOptions = struct {
     confirm_mode: config_mod.ConfirmMode = .all,
     dry_run: bool = false,
@@ -165,8 +204,15 @@ pub const Agent = struct {
 
         var turn: usize = 0;
         while (turn < self.options.max_turns) : (turn += 1) {
-            // Call the LLM
-            var response = try self.callLlm();
+            // Call the LLM with a spinner for visual feedback
+            var spinner = Spinner.init();
+            spinner.start();
+            errdefer spinner.stop();
+            var response = self.callLlm() catch |err| {
+                spinner.stop();
+                return err;
+            };
+            spinner.stop();
 
             // Print any text content (thinking display)
             for (response.message.content) |block| {
@@ -343,6 +389,15 @@ pub const Agent = struct {
 
     fn callLlm(self: *Agent) !provider.ChatResponse {
         return switch (self.cfg.provider) {
+            .proxy => gemini.chat(
+                self.allocator,
+                null, // no API key — proxy injects it
+                self.cfg.proxy_model,
+                self.system_prompt,
+                self.messages.items,
+                &TOOLS,
+                self.cfg.proxy_url, // base_url = proxy endpoint
+            ),
             .anthropic => blk: {
                 const api_key = self.cfg.anthropic_api_key orelse return error.NoApiKey;
                 break :blk anthropic.chat(
@@ -375,6 +430,7 @@ pub const Agent = struct {
                     self.system_prompt,
                     self.messages.items,
                     &TOOLS,
+                    null, // use default Gemini URL
                 );
             },
             .ollama => ollama.chat(

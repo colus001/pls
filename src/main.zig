@@ -4,7 +4,7 @@ const agent_mod = @import("agent.zig");
 const init_mod = @import("init.zig");
 const config_editor = @import("config_editor.zig");
 
-const VERSION = "0.1.1";
+const VERSION = "0.2.0";
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -165,7 +165,7 @@ fn runTask(
         if (config_mod.Provider.fromString(p)) |prov| {
             cfg.provider = prov;
         } else {
-            try stderr.print("Unknown provider: {s} (expected: anthropic, openai, gemini, ollama)\n", .{p});
+            try stderr.print("Unknown provider: {s} (expected: proxy, anthropic, openai, gemini, ollama)\n", .{p});
             return;
         }
     }
@@ -173,6 +173,7 @@ fn runTask(
     if (model_override) |m| {
         const owned = try cfg.ownString(m);
         switch (cfg.provider) {
+            .proxy => cfg.proxy_model = owned,
             .anthropic => cfg.anthropic_model = owned,
             .openai => cfg.openai_model = owned,
             .gemini => cfg.gemini_model = owned,
@@ -183,8 +184,8 @@ fn runTask(
     // Determine effective confirm mode: CLI flag > config file
     const confirm_mode = confirm_mode_override orelse cfg.confirm_mode;
 
-    // Validate that we have an API key (unless using Ollama)
-    if (cfg.provider != .ollama and cfg.getApiKey() == null) {
+    // Validate that we have an API key (unless using proxy or Ollama)
+    if (cfg.provider.requiresApiKey() and cfg.getApiKey() == null) {
         try stderr.print("No API key configured for {s}.\n", .{cfg.provider.toString()});
         try stderr.writeAll("Run `pls init` to set up your configuration.\n");
         return;
@@ -234,7 +235,9 @@ fn showConfig(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !v
             try stdout.writeAll("  api_key       = (empty)\n");
         }
     } else {
-        if (cfg.provider == .ollama) {
+        if (cfg.provider == .proxy) {
+            try stdout.print("  proxy_url     = {s}\n", .{cfg.proxy_url});
+        } else if (cfg.provider == .ollama) {
             try stdout.print("  ollama_host   = {s}\n", .{cfg.ollama_host});
         } else {
             try stdout.writeAll("  api_key       = (not set)\n");
@@ -292,7 +295,7 @@ fn printUsage(out: anytype) !void {
         \\  Options:
         \\    --confirm <mode>        Set confirmation mode: all, destructive, none
         \\    --yes, -y               Shorthand for --confirm=none
-        \\    --provider <name>       Override LLM provider (anthropic, openai, gemini, ollama)
+        \\    --provider <name>       Override LLM provider (proxy, anthropic, openai, gemini, ollama)
         \\    --model <name>          Override model name
         \\    --max-turns <n>         Maximum agent turns (default: 20)
         \\    --dry-run               Show commands without executing them

@@ -16,24 +16,27 @@ pub fn runSetup(allocator: Allocator) !void {
 
     // Select provider
     try out.writeAll("  Select your LLM provider:\n");
-    try out.writeAll("    \x1b[1m1\x1b[0m) Anthropic (Claude)\n");
-    try out.writeAll("    \x1b[1m2\x1b[0m) OpenAI (GPT)\n");
-    try out.writeAll("    \x1b[1m3\x1b[0m) Google Gemini\n");
-    try out.writeAll("    \x1b[1m4\x1b[0m) Ollama (local)\n\n");
+    try out.writeAll("    \x1b[1m1\x1b[0m) Free tier - no API key needed (default)\n");
+    try out.writeAll("    \x1b[1m2\x1b[0m) Anthropic (Claude)\n");
+    try out.writeAll("    \x1b[1m3\x1b[0m) OpenAI (GPT)\n");
+    try out.writeAll("    \x1b[1m4\x1b[0m) Google Gemini\n");
+    try out.writeAll("    \x1b[1m5\x1b[0m) Ollama (local)\n\n");
     try out.writeAll("  Choice [1]: ");
 
     const provider_choice = try readLine(stdin);
     const prov: config_mod.Provider = if (provider_choice.len == 0 or std.mem.eql(u8, provider_choice, "1"))
-        .anthropic
+        .proxy
     else if (std.mem.eql(u8, provider_choice, "2"))
-        .openai
+        .anthropic
     else if (std.mem.eql(u8, provider_choice, "3"))
-        .gemini
+        .openai
     else if (std.mem.eql(u8, provider_choice, "4"))
+        .gemini
+    else if (std.mem.eql(u8, provider_choice, "5"))
         .ollama
     else blk: {
-        try out.writeAll("  Invalid choice, defaulting to Anthropic.\n");
-        break :blk .anthropic;
+        try out.writeAll("  Invalid choice, defaulting to free tier.\n");
+        break :blk .proxy;
     };
 
     var cfg = config_mod.Config.init(allocator);
@@ -42,6 +45,10 @@ pub fn runSetup(allocator: Allocator) !void {
     try out.writeAll("\n");
 
     switch (prov) {
+        .proxy => {
+            try out.writeAll("  Using the free proxy tier. No API key needed.\n");
+            try out.writeAll("  You can switch to your own API key anytime with `pls config`.\n");
+        },
         .anthropic => {
             // API key
             try out.writeAll("  Enter your Anthropic API key: ");

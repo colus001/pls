@@ -19,6 +19,8 @@ Both work. `pls` understands any language.
 3. Commands run in a loop: execute, observe output, decide next step
 4. Destructive commands (kill, rm, etc.) require your confirmation
 
+**No API key required.** `pls` works out of the box using a free hosted proxy. Power users can bring their own API key for unlimited usage.
+
 ## Install
 
 ### Quick install (macOS / Linux)
@@ -48,7 +50,9 @@ Pre-built binaries and `.deb` packages are also available on the [releases page]
 
 ## Setup
 
-Run the interactive setup wizard:
+`pls` works immediately after install — no setup needed. The default free tier requires no API key.
+
+To configure a different provider or bring your own API key, run:
 
 ```
 $ pls init
@@ -56,10 +60,11 @@ $ pls init
   Welcome to pls! Let's get you set up.
 
   Select your LLM provider:
-    1) Anthropic (Claude)
-    2) OpenAI (GPT)
-    3) Google Gemini
-    4) Ollama (local)
+    1) Free tier - no API key needed (default)
+    2) Anthropic (Claude)
+    3) OpenAI (GPT)
+    4) Google Gemini
+    5) Ollama (local)
 
   Choice [1]: _
 ```
@@ -70,7 +75,8 @@ Config is saved to `~/.config/pls/config.toml`.
 
 | Provider | Auth | Use case |
 |----------|------|----------|
-| **Anthropic** | API key | Best tool-use, recommended |
+| **Free tier (proxy)** | None | Works out of the box, no API key needed |
+| **Anthropic** | API key | Best tool-use, recommended for power users |
 | **OpenAI** | API key | GPT-4o, widely available |
 | **Gemini** | API key | Google's Gemini models |
 | **Ollama** | None (local) | Offline, private, free |
@@ -80,9 +86,11 @@ Config is saved to `~/.config/pls/config.toml`.
 These override the config file:
 
 ```bash
-export PLS_PROVIDER=gemini        # anthropic | openai | gemini | ollama
+export PLS_PROVIDER=gemini        # proxy | anthropic | openai | gemini | ollama
 export DO_PROVIDER=gemini         # same as PLS_PROVIDER (legacy alias)
 export PLS_CONFIRM=destructive    # all | destructive | none
+export PLS_PROXY_URL=https://my-proxy.example.com
+export PLS_PROXY_MODEL=gemini-2.5-flash-lite
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 export GEMINI_API_KEY=AIza...
@@ -123,7 +131,7 @@ pls config show              Show active configuration
 
 --confirm <mode>             Confirmation mode: all | destructive | none
 --yes, -y                    Shorthand for --confirm=none
---provider <name>            Override LLM provider: anthropic | openai | gemini | ollama
+--provider <name>            Override LLM provider (proxy, anthropic, openai, gemini, ollama)
 --model <name>               Override model name for this invocation
 --max-turns <n>              Maximum agent turns (default: 20)
 --dry-run                    Show commands without executing them
@@ -139,8 +147,12 @@ Piping:
 `~/.config/pls/config.toml`:
 
 ```toml
-provider = "anthropic"
+provider = "proxy"
 confirm_mode = "all"          # all | destructive | none
+
+# Proxy settings (optional, defaults shown)
+# proxy_url = "https://pls-proxy.seokjun.kim"
+# proxy_model = "gemini-2.5-flash-lite"
 
 anthropic_api_key = "sk-ant-..."
 anthropic_model = "claude-sonnet-4-5-20250514"
@@ -162,6 +174,45 @@ ollama_model = "llama3.1"
 - Use `-y` to skip confirmations (power users only)
 - The agent loop is capped at 20 turns to prevent runaway execution
 
+## Self-hosting the proxy
+
+The default free tier uses a hosted proxy at `pls-proxy.seokjun.kim`. You can self-host your own proxy to remove rate limits or use a different model.
+
+### Proxy protocol
+
+The proxy is a simple passthrough that forwards requests to the Google Gemini API. It speaks the [Gemini REST API](https://ai.google.dev/api/generate-content) format natively:
+
+**Endpoint:**
+
+```
+POST /v1beta/models/{model}:generateContent
+Content-Type: application/json
+```
+
+**Request body:** Standard Gemini `generateContent` request (with `system_instruction`, `contents`, and `tools` fields).
+
+**Response:** Standard Gemini `generateContent` response, passed through unmodified.
+
+The proxy's only responsibilities:
+1. Inject the Gemini API key (so clients don't need one)
+2. Rate limiting / abuse prevention
+
+### Deploy your own
+
+A reference implementation using Cloudflare Workers is available at [colus001/pls-proxy](https://github.com/colus001/pls-proxy).
+
+Then configure `pls` to use your proxy:
+
+```bash
+export PLS_PROXY_URL=https://your-proxy.example.com
+```
+
+Or in `~/.config/pls/config.toml`:
+
+```toml
+proxy_url = "https://your-proxy.example.com"
+```
+
 ## Architecture
 
 Written in Zig 0.15. Single binary, no runtime dependencies.
@@ -178,7 +229,7 @@ src/
     provider.zig        Shared types (Message, Tool, ToolCall, etc.)
     anthropic.zig       Anthropic Claude API
     openai.zig          OpenAI GPT API
-    gemini.zig          Google Gemini API
+    gemini.zig          Google Gemini API (also used by proxy provider)
     ollama.zig          Ollama local API (delegates to openai.zig format)
     http_client.zig     HTTP POST helper using std.http.Client
     json_helpers.zig    JSON serialization for API request bodies
