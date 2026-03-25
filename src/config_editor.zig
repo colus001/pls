@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const config_mod = @import("config.zig");
+const models = @import("models.zig");
 const tty = @import("tty.zig");
 
 const readLine = tty.readLine;
@@ -38,17 +39,14 @@ pub fn runEditor(allocator: Allocator) !void {
         };
 
         const changed = switch (num) {
+            // General
             1 => try editProvider(&cfg, stdin, out),
             2 => try editConfirmMode(&cfg, stdin, out),
+            // Active provider
             3 => try editActiveModel(&cfg, stdin, out),
-            4 => try editApiKey("Anthropic", &cfg, .anthropic, stdin, out),
-            5 => try editApiKey("OpenAI", &cfg, .openai, stdin, out),
-            6 => try editApiKey("Gemini", &cfg, .gemini, stdin, out),
-            7 => try editFreeText("Ollama host URL", cfg.ollama_host, &cfg, .ollama_host, stdin, out),
-            8 => try editFreeText("Anthropic model", cfg.anthropic_model, &cfg, .anthropic_model, stdin, out),
-            9 => try editFreeText("OpenAI model", cfg.openai_model, &cfg, .openai_model, stdin, out),
-            10 => try editFreeText("Gemini model", cfg.gemini_model, &cfg, .gemini_model, stdin, out),
-            11 => try editFreeText("Ollama model", cfg.ollama_model, &cfg, .ollama_model, stdin, out),
+            4 => try editActiveKey(&cfg, stdin, out),
+            // Ollama-specific
+            5 => try editFreeText("Ollama host URL", cfg.ollama_host, &cfg, .ollama_host, stdin, out),
             else => blk: {
                 try out.writeAll("  Invalid choice.\n\n");
                 break :blk false;
@@ -69,25 +67,31 @@ fn displayMenu(cfg: *const config_mod.Config, out: anytype) !void {
     try out.writeAll("\n  \x1b[1mpls configuration\x1b[0m\n");
     try out.writeAll("  \x1b[90m───────────────────────────────────────────────\x1b[0m\n");
 
+    // General
+    try out.writeAll("  \x1b[90m  General\x1b[0m\n");
     try out.print("   \x1b[1m1\x1b[0m) provider        = {s}\n", .{cfg.provider.toString()});
     try out.print("   \x1b[1m2\x1b[0m) confirm_mode    = {s}\n", .{cfg.confirm_mode.toString()});
+
+    // Active provider
+    try out.print("  \x1b[90m  Active provider ({s})\x1b[0m\n", .{cfg.provider.toString()});
     try out.print("   \x1b[1m3\x1b[0m) model           = {s}\n", .{cfg.getModel()});
-    try out.print("   \x1b[1m4\x1b[0m) anthropic_key   = {s}\n", .{maskKey(cfg.anthropic_api_key)});
-    try out.print("   \x1b[1m5\x1b[0m) openai_key      = {s}\n", .{maskKey(cfg.openai_api_key)});
-    try out.print("   \x1b[1m6\x1b[0m) gemini_key      = {s}\n", .{maskKey(cfg.gemini_api_key)});
-    try out.print("   \x1b[1m7\x1b[0m) ollama_host     = {s}\n", .{cfg.ollama_host});
-    try out.print("   \x1b[1m8\x1b[0m) anthropic_model = {s}\n", .{cfg.anthropic_model});
-    try out.print("   \x1b[1m9\x1b[0m) openai_model    = {s}\n", .{cfg.openai_model});
-    try out.print("  \x1b[1m10\x1b[0m) gemini_model    = {s}\n", .{cfg.gemini_model});
-    try out.print("  \x1b[1m11\x1b[0m) ollama_model    = {s}\n", .{cfg.ollama_model});
+
+    if (cfg.provider.requiresApiKey()) {
+        try out.print("   \x1b[1m4\x1b[0m) api_key         = {s}\n", .{maskKey(cfg.getApiKey())});
+    } else if (cfg.provider == .proxy) {
+        try out.print("   \x1b[90m  proxy_url       = {s}\x1b[0m\n", .{cfg.proxy_url});
+    }
+
+    if (cfg.provider == .ollama) {
+        try out.print("   \x1b[1m5\x1b[0m) ollama_host     = {s}\n", .{cfg.ollama_host});
+    }
+
     try out.writeAll("\n");
 }
 
 fn maskKey(key: ?[]const u8) []const u8 {
     if (key) |k| {
         if (k.len > 8) {
-            // We can't dynamically format here without allocation, so just
-            // indicate it's set. The full masked view is in `config show`.
             return "(set)";
         } else if (k.len > 0) {
             return "(set)";
@@ -166,32 +170,35 @@ fn editConfirmMode(cfg: *config_mod.Config, stdin: anytype, out: anytype) !bool 
 
 fn editActiveModel(cfg: *config_mod.Config, stdin: anytype, out: anytype) !bool {
     return switch (cfg.provider) {
-        .proxy => editModelMenu(cfg, .proxy_model, "proxy", &[_][]const u8{
-            "gemini-3-flash-preview",
-            "gemini-2.5-flash-lite",
-        }, cfg.proxy_model, stdin, out),
-        .anthropic => editModelMenu(cfg, .anthropic_model, "anthropic", &[_][]const u8{
-            "claude-sonnet-4-5-20250514",
-            "claude-opus-4-5-20250514",
-            "claude-haiku-3-5-20241022",
-        }, cfg.anthropic_model, stdin, out),
-        .openai => editModelMenu(cfg, .openai_model, "openai", &[_][]const u8{
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4-turbo",
-        }, cfg.openai_model, stdin, out),
-        .gemini => editModelMenu(cfg, .gemini_model, "gemini", &[_][]const u8{
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-        }, cfg.gemini_model, stdin, out),
-        .ollama => editModelMenu(cfg, .ollama_model, "ollama", &[_][]const u8{
-            "llama3.1",
-            "llama3.2",
-            "mistral",
-            "qwen2.5",
-        }, cfg.ollama_model, stdin, out),
+        .proxy => editModelMenu(cfg, .proxy_model, "proxy", &models.PROXY_MODELS, cfg.proxy_model, stdin, out),
+        .anthropic => editModelMenu(cfg, .anthropic_model, "anthropic", &models.ANTHROPIC_MODELS, cfg.anthropic_model, stdin, out),
+        .openai => editModelMenu(cfg, .openai_model, "openai", &models.OPENAI_MODELS, cfg.openai_model, stdin, out),
+        .gemini => editModelMenu(cfg, .gemini_model, "gemini", &models.GEMINI_MODELS, cfg.gemini_model, stdin, out),
+        .ollama => editModelMenu(cfg, .ollama_model, "ollama", &models.OLLAMA_MODELS, cfg.ollama_model, stdin, out),
     };
+}
+
+fn editActiveKey(cfg: *config_mod.Config, stdin: anytype, out: anytype) !bool {
+    if (!cfg.provider.requiresApiKey()) {
+        try out.writeAll("  This provider does not require an API key.\n");
+        return false;
+    }
+
+    const provider_name: []const u8 = cfg.provider.toString();
+    try out.print("\n  Enter {s} API key (leave blank to keep current): ", .{provider_name});
+    const key = try readLineMasked(stdin);
+
+    if (key.len == 0) return false;
+
+    const owned = try cfg.ownString(key);
+    switch (cfg.provider) {
+        .proxy => {},
+        .anthropic => cfg.anthropic_api_key = owned,
+        .openai => cfg.openai_api_key = owned,
+        .gemini => cfg.gemini_api_key = owned,
+        .ollama => {},
+    }
+    return true;
 }
 
 const StringField = enum {
@@ -255,29 +262,6 @@ fn editModelMenu(
         try out.writeAll("  Invalid choice.\n");
         return false;
     }
-}
-
-fn editApiKey(
-    provider_name: []const u8,
-    cfg: *config_mod.Config,
-    provider: config_mod.Provider,
-    stdin: anytype,
-    out: anytype,
-) !bool {
-    try out.print("\n  Enter {s} API key (leave blank to keep current): ", .{provider_name});
-    const key = try readLineMasked(stdin);
-
-    if (key.len == 0) return false;
-
-    const owned = try cfg.ownString(key);
-    switch (provider) {
-        .proxy => {}, // Proxy doesn't use API keys
-        .anthropic => cfg.anthropic_api_key = owned,
-        .openai => cfg.openai_api_key = owned,
-        .gemini => cfg.gemini_api_key = owned,
-        .ollama => {}, // Ollama doesn't use API keys
-    }
-    return true;
 }
 
 fn editFreeText(

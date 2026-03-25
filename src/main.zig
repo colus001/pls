@@ -4,7 +4,7 @@ const agent_mod = @import("agent.zig");
 const init_mod = @import("init.zig");
 const config_editor = @import("config_editor.zig");
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -47,6 +47,9 @@ pub fn main() !void {
             return;
         } else if (std.mem.eql(u8, arg, "config") and i + 1 < args.len and std.mem.eql(u8, args[i + 1], "show")) {
             try showConfig(allocator, stdout, stderr);
+            return;
+        } else if (std.mem.eql(u8, arg, "config") and i + 1 < args.len and std.mem.eql(u8, args[i + 1], "reset")) {
+            try resetConfig(allocator, stderr);
             return;
         } else if (std.mem.eql(u8, arg, "config")) {
             try config_editor.runEditor(allocator);
@@ -200,11 +203,15 @@ fn runTask(
     defer agent.deinit();
 
     agent.run(task) catch |err| {
-        try stderr.print("\nError: {}\n", .{err});
+        // RateLimited: proxy.zig already printed a descriptive message; skip generic prefix
+        if (err != error.RateLimited) {
+            try stderr.print("\nError: {}\n", .{err});
+        }
         switch (err) {
             error.NoApiKey => try stderr.writeAll("Run `pls init` to configure your API key.\n"),
             error.HttpError => try stderr.writeAll("Failed to connect to the LLM API. Check your network.\n"),
             error.ApiError => try stderr.writeAll("The LLM API returned an error. Check your API key and model.\n"),
+            error.RateLimited => {}, // message already printed by proxy.zig
             else => {},
         }
     };
@@ -253,6 +260,14 @@ fn showConfig(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !v
     try stdout.print("  config_file   = {s}\n\n", .{config_path});
 }
 
+fn resetConfig(allocator: std.mem.Allocator, stderr: anytype) !void {
+    config_mod.reset(allocator) catch |err| {
+        try stderr.print("Error resetting config: {}\n", .{err});
+        return;
+    };
+    try stderr.writeAll("Config reset to defaults. Run `pls init` to reconfigure.\n");
+}
+
 /// Read from stdin if it's piped (not a terminal).
 fn readStdinIfPiped(allocator: std.mem.Allocator) !?[]const u8 {
     const stdin_file = std.fs.File.stdin();
@@ -291,6 +306,7 @@ fn printUsage(out: anytype) !void {
         \\    pls init                Interactive setup wizard
         \\    pls config              Interactive config editor
         \\    pls config show         Show active configuration
+        \\    pls config reset        Reset configuration to defaults
         \\
         \\  Options:
         \\    --confirm <mode>        Set confirmation mode: all, destructive, none

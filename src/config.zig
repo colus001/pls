@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const models = @import("models.zig");
 
 pub const ConfirmMode = enum {
     all,
@@ -58,26 +59,26 @@ pub const Provider = enum {
 };
 
 pub const DEFAULT_PROXY_URL = "https://pls-proxy.seokjun.kim";
-pub const DEFAULT_PROXY_MODEL = "gemini-3-flash-preview";
+pub const DEFAULT_PROXY_MODEL = models.DEFAULT_PROXY_MODEL;
 
 pub const Config = struct {
     provider: Provider = .proxy,
     confirm_mode: ConfirmMode = .all,
 
     proxy_url: []const u8 = DEFAULT_PROXY_URL,
-    proxy_model: []const u8 = DEFAULT_PROXY_MODEL,
+    proxy_model: []const u8 = models.DEFAULT_PROXY_MODEL,
 
     anthropic_api_key: ?[]const u8 = null,
-    anthropic_model: []const u8 = "claude-sonnet-4-5-20250514",
+    anthropic_model: []const u8 = models.DEFAULT_ANTHROPIC_MODEL,
 
     openai_api_key: ?[]const u8 = null,
-    openai_model: []const u8 = "gpt-4o",
+    openai_model: []const u8 = models.DEFAULT_OPENAI_MODEL,
 
     gemini_api_key: ?[]const u8 = null,
-    gemini_model: []const u8 = "gemini-2.5-flash",
+    gemini_model: []const u8 = models.DEFAULT_GEMINI_MODEL,
 
     ollama_host: []const u8 = "http://localhost:11434",
-    ollama_model: []const u8 = "llama3.1",
+    ollama_model: []const u8 = models.DEFAULT_OLLAMA_MODEL,
 
     allocator: Allocator,
 
@@ -334,10 +335,10 @@ test "Config defaults" {
     try std.testing.expect(cfg.anthropic_api_key == null);
     try std.testing.expect(cfg.openai_api_key == null);
     try std.testing.expect(cfg.gemini_api_key == null);
-    try std.testing.expectEqualStrings("claude-sonnet-4-5-20250514", cfg.anthropic_model);
-    try std.testing.expectEqualStrings("gpt-4o", cfg.openai_model);
-    try std.testing.expectEqualStrings("gemini-2.5-flash", cfg.gemini_model);
-    try std.testing.expectEqualStrings("llama3.1", cfg.ollama_model);
+    try std.testing.expectEqualStrings(models.DEFAULT_ANTHROPIC_MODEL, cfg.anthropic_model);
+    try std.testing.expectEqualStrings(models.DEFAULT_OPENAI_MODEL, cfg.openai_model);
+    try std.testing.expectEqualStrings(models.DEFAULT_GEMINI_MODEL, cfg.gemini_model);
+    try std.testing.expectEqualStrings(models.DEFAULT_OLLAMA_MODEL, cfg.ollama_model);
     try std.testing.expectEqualStrings("http://localhost:11434", cfg.ollama_host);
 }
 
@@ -373,16 +374,16 @@ test "Config.getModel dispatches by provider" {
     try std.testing.expectEqualStrings(DEFAULT_PROXY_MODEL, cfg.getModel());
 
     cfg.provider = .anthropic;
-    try std.testing.expectEqualStrings("claude-sonnet-4-5-20250514", cfg.getModel());
+    try std.testing.expectEqualStrings(models.DEFAULT_ANTHROPIC_MODEL, cfg.getModel());
 
     cfg.provider = .openai;
-    try std.testing.expectEqualStrings("gpt-4o", cfg.getModel());
+    try std.testing.expectEqualStrings(models.DEFAULT_OPENAI_MODEL, cfg.getModel());
 
     cfg.provider = .gemini;
-    try std.testing.expectEqualStrings("gemini-2.5-flash", cfg.getModel());
+    try std.testing.expectEqualStrings(models.DEFAULT_GEMINI_MODEL, cfg.getModel());
 
     cfg.provider = .ollama;
-    try std.testing.expectEqualStrings("llama3.1", cfg.getModel());
+    try std.testing.expectEqualStrings(models.DEFAULT_OLLAMA_MODEL, cfg.getModel());
 }
 
 test "parseTOML basic key-value pairs" {
@@ -538,4 +539,15 @@ pub fn save(cfg: *const Config, allocator: Allocator) !void {
 
     try writer.print("ollama_host = \"{s}\"\n", .{cfg.ollama_host});
     try writer.print("ollama_model = \"{s}\"\n", .{cfg.ollama_model});
+}
+
+/// Delete the config file, resetting to defaults.
+pub fn reset(allocator: Allocator) !void {
+    const config_path = try getConfigPath(allocator);
+    defer allocator.free(config_path);
+
+    std.fs.deleteFileAbsolute(config_path) catch |err| {
+        if (err == error.FileNotFound) return; // already clean
+        return err;
+    };
 }

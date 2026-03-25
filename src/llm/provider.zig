@@ -137,10 +137,23 @@ pub const StopReason = enum {
     }
 };
 
+/// Rate limit information returned by the pls proxy.
+/// Only set when using the proxy provider; null for all other providers.
+pub const RateLimitInfo = struct {
+    remaining_burst: u32,
+    limit_burst: u32,
+    remaining_hourly: u32,
+    limit_hourly: u32,
+    remaining_daily: u32,
+    limit_daily: u32,
+};
+
 /// Response from an LLM chat call.
 pub const ChatResponse = struct {
     message: Message,
     stop_reason: StopReason,
+    /// Rate limit usage from the proxy. Null for non-proxy providers.
+    rate_limit: ?RateLimitInfo = null,
 
     pub fn deinit(self: *ChatResponse, allocator: Allocator) void {
         self.message.deinit(allocator);

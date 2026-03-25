@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const config_mod = @import("config.zig");
+const models = @import("models.zig");
 const tty = @import("tty.zig");
 
 const readLine = tty.readLine;
@@ -50,130 +51,39 @@ pub fn runSetup(allocator: Allocator) !void {
             try out.writeAll("  You can switch to your own API key anytime with `pls config`.\n");
         },
         .anthropic => {
-            // API key
             try out.writeAll("  Enter your Anthropic API key: ");
             const key = try readLineMasked(stdin);
-            if (key.len > 0) {
-                cfg.anthropic_api_key = try cfg.ownString(key);
-            }
+            if (key.len > 0) cfg.anthropic_api_key = try cfg.ownString(key);
 
-            // Model
-            try out.writeAll("\n  Select a model:\n");
-            try out.writeAll("    \x1b[1m1\x1b[0m) claude-sonnet-4-5-20250514 (recommended)\n");
-            try out.writeAll("    \x1b[1m2\x1b[0m) claude-opus-4-5-20250514\n");
-            try out.writeAll("    \x1b[1m3\x1b[0m) claude-haiku-3-5-20241022\n");
-            try out.writeAll("    \x1b[1m4\x1b[0m) Custom\n\n");
-            try out.writeAll("  Choice [1]: ");
-            const model_choice = try readLine(stdin);
-
-            if (model_choice.len == 0 or std.mem.eql(u8, model_choice, "1")) {
-                // default
-            } else if (std.mem.eql(u8, model_choice, "2")) {
-                cfg.anthropic_model = try cfg.ownString("claude-opus-4-5-20250514");
-            } else if (std.mem.eql(u8, model_choice, "3")) {
-                cfg.anthropic_model = try cfg.ownString("claude-haiku-3-5-20241022");
-            } else if (std.mem.eql(u8, model_choice, "4")) {
-                try out.writeAll("  Enter model name: ");
-                const custom = try readLine(stdin);
-                if (custom.len > 0) {
-                    cfg.anthropic_model = try cfg.ownString(custom);
-                }
+            if (try chooseModel(&models.ANTHROPIC_MODELS, stdin, out)) |m| {
+                cfg.anthropic_model = try cfg.ownString(m);
             }
         },
         .openai => {
-            // API key
             try out.writeAll("  Enter your OpenAI API key: ");
             const key = try readLineMasked(stdin);
-            if (key.len > 0) {
-                cfg.openai_api_key = try cfg.ownString(key);
-            }
+            if (key.len > 0) cfg.openai_api_key = try cfg.ownString(key);
 
-            // Model
-            try out.writeAll("\n  Select a model:\n");
-            try out.writeAll("    \x1b[1m1\x1b[0m) gpt-4o (recommended)\n");
-            try out.writeAll("    \x1b[1m2\x1b[0m) gpt-4o-mini\n");
-            try out.writeAll("    \x1b[1m3\x1b[0m) gpt-4-turbo\n");
-            try out.writeAll("    \x1b[1m4\x1b[0m) Custom\n\n");
-            try out.writeAll("  Choice [1]: ");
-            const model_choice = try readLine(stdin);
-
-            if (model_choice.len == 0 or std.mem.eql(u8, model_choice, "1")) {
-                // default
-            } else if (std.mem.eql(u8, model_choice, "2")) {
-                cfg.openai_model = try cfg.ownString("gpt-4o-mini");
-            } else if (std.mem.eql(u8, model_choice, "3")) {
-                cfg.openai_model = try cfg.ownString("gpt-4-turbo");
-            } else if (std.mem.eql(u8, model_choice, "4")) {
-                try out.writeAll("  Enter model name: ");
-                const custom = try readLine(stdin);
-                if (custom.len > 0) {
-                    cfg.openai_model = try cfg.ownString(custom);
-                }
+            if (try chooseModel(&models.OPENAI_MODELS, stdin, out)) |m| {
+                cfg.openai_model = try cfg.ownString(m);
             }
         },
         .gemini => {
-            // API key
             try out.writeAll("  Enter your Gemini API key: ");
             const key = try readLineMasked(stdin);
-            if (key.len > 0) {
-                cfg.gemini_api_key = try cfg.ownString(key);
-            }
+            if (key.len > 0) cfg.gemini_api_key = try cfg.ownString(key);
 
-            // Model
-            try out.writeAll("\n  Select a model:\n");
-            try out.writeAll("    \x1b[1m1\x1b[0m) gemini-2.5-flash (recommended)\n");
-            try out.writeAll("    \x1b[1m2\x1b[0m) gemini-2.5-pro\n");
-            try out.writeAll("    \x1b[1m3\x1b[0m) gemini-2.0-flash\n");
-            try out.writeAll("    \x1b[1m4\x1b[0m) Custom\n\n");
-            try out.writeAll("  Choice [1]: ");
-            const model_choice = try readLine(stdin);
-
-            if (model_choice.len == 0 or std.mem.eql(u8, model_choice, "1")) {
-                // default
-            } else if (std.mem.eql(u8, model_choice, "2")) {
-                cfg.gemini_model = try cfg.ownString("gemini-2.5-pro");
-            } else if (std.mem.eql(u8, model_choice, "3")) {
-                cfg.gemini_model = try cfg.ownString("gemini-2.0-flash");
-            } else if (std.mem.eql(u8, model_choice, "4")) {
-                try out.writeAll("  Enter model name: ");
-                const custom = try readLine(stdin);
-                if (custom.len > 0) {
-                    cfg.gemini_model = try cfg.ownString(custom);
-                }
+            if (try chooseModel(&models.GEMINI_MODELS, stdin, out)) |m| {
+                cfg.gemini_model = try cfg.ownString(m);
             }
         },
         .ollama => {
-            // Host
             try out.writeAll("  Ollama host URL [http://localhost:11434]: ");
             const host = try readLine(stdin);
-            if (host.len > 0) {
-                cfg.ollama_host = try cfg.ownString(host);
-            }
+            if (host.len > 0) cfg.ollama_host = try cfg.ownString(host);
 
-            // Model
-            try out.writeAll("\n  Select a model:\n");
-            try out.writeAll("    \x1b[1m1\x1b[0m) llama3.1 (recommended)\n");
-            try out.writeAll("    \x1b[1m2\x1b[0m) llama3.2\n");
-            try out.writeAll("    \x1b[1m3\x1b[0m) mistral\n");
-            try out.writeAll("    \x1b[1m4\x1b[0m) qwen2.5\n");
-            try out.writeAll("    \x1b[1m5\x1b[0m) Custom\n\n");
-            try out.writeAll("  Choice [1]: ");
-            const model_choice = try readLine(stdin);
-
-            if (model_choice.len == 0 or std.mem.eql(u8, model_choice, "1")) {
-                // default
-            } else if (std.mem.eql(u8, model_choice, "2")) {
-                cfg.ollama_model = try cfg.ownString("llama3.2");
-            } else if (std.mem.eql(u8, model_choice, "3")) {
-                cfg.ollama_model = try cfg.ownString("mistral");
-            } else if (std.mem.eql(u8, model_choice, "4")) {
-                cfg.ollama_model = try cfg.ownString("qwen2.5");
-            } else if (std.mem.eql(u8, model_choice, "5")) {
-                try out.writeAll("  Enter model name: ");
-                const custom = try readLine(stdin);
-                if (custom.len > 0) {
-                    cfg.ollama_model = try cfg.ownString(custom);
-                }
+            if (try chooseModel(&models.OLLAMA_MODELS, stdin, out)) |m| {
+                cfg.ollama_model = try cfg.ownString(m);
             }
         },
     }
@@ -214,4 +124,32 @@ pub fn runSetup(allocator: Allocator) !void {
     } else {
         try out.writeAll("\n  Setup cancelled.\n\n");
     }
+}
+
+/// Display a model selection menu from a preset list. Returns the chosen model
+/// name, or null if the user kept the default (option 1).
+fn chooseModel(presets: []const []const u8, stdin: anytype, out: anytype) !?[]const u8 {
+    try out.writeAll("\n  Select a model:\n");
+    for (presets, 0..) |preset, i| {
+        if (i == 0) {
+            try out.print("    \x1b[1m{d}\x1b[0m) {s} (recommended)\n", .{ i + 1, preset });
+        } else {
+            try out.print("    \x1b[1m{d}\x1b[0m) {s}\n", .{ i + 1, preset });
+        }
+    }
+    try out.print("    \x1b[1m{d}\x1b[0m) Custom\n\n", .{presets.len + 1});
+    try out.writeAll("  Choice [1]: ");
+
+    const choice = try readLine(stdin);
+    if (choice.len == 0 or std.mem.eql(u8, choice, "1")) return null; // keep default
+
+    const num = std.fmt.parseInt(usize, choice, 10) catch return null;
+    if (num >= 2 and num <= presets.len) {
+        return presets[num - 1];
+    } else if (num == presets.len + 1) {
+        try out.writeAll("  Enter model name: ");
+        const custom = try readLine(stdin);
+        if (custom.len > 0) return custom;
+    }
+    return null;
 }

@@ -179,6 +179,18 @@ jobs:
               bin.install Dir["pls-*"].first => "pls"
             end
 
+            def caveats
+              <<~EOS
+                pls works out of the box with the free tier (no API key needed).
+
+                To get started:
+                  pls 'hello world'
+
+                To use your own API key for unlimited usage:
+                  pls init
+              EOS
+            end
+
             test do
               assert_match "pls v#{version}", shell_output("#{bin}/pls --version")
             end

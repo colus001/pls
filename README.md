@@ -19,7 +19,7 @@ Both work. `pls` understands any language.
 3. Commands run in a loop: execute, observe output, decide next step
 4. Destructive commands (kill, rm, etc.) require your confirmation
 
-**No API key required.** `pls` works out of the box using a free hosted proxy. Power users can bring their own API key for unlimited usage.
+**No API key required.** `pls` works out of the box using a free hosted proxy powered by Gemini. No setup, no config — just install and go. Power users can bring their own API key for unlimited usage.
 
 ## Install
 
@@ -47,6 +47,12 @@ cp zig-out/bin/pls ~/.local/bin/
 ```
 
 Pre-built binaries and `.deb` packages are also available on the [releases page](https://github.com/colus001/pls/releases/latest).
+
+### Update
+
+```bash
+brew upgrade pls
+```
 
 ## Setup
 
@@ -90,7 +96,7 @@ export PLS_PROVIDER=gemini        # proxy | anthropic | openai | gemini | ollama
 export DO_PROVIDER=gemini         # same as PLS_PROVIDER (legacy alias)
 export PLS_CONFIRM=destructive    # all | destructive | none
 export PLS_PROXY_URL=https://my-proxy.example.com
-export PLS_PROXY_MODEL=gemini-2.5-flash-lite
+export PLS_PROXY_MODEL=gemini-3-flash-preview
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 export GEMINI_API_KEY=AIza...
@@ -152,7 +158,7 @@ confirm_mode = "all"          # all | destructive | none
 
 # Proxy settings (optional, defaults shown)
 # proxy_url = "https://pls-proxy.seokjun.kim"
-# proxy_model = "gemini-2.5-flash-lite"
+# proxy_model = "gemini-3-flash-preview"
 
 anthropic_api_key = "sk-ant-..."
 anthropic_model = "claude-sonnet-4-5-20250514"

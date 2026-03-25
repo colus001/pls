@@ -6,6 +6,7 @@ const provider = @import("llm/provider.zig");
 const anthropic = @import("llm/anthropic.zig");
 const openai = @import("llm/openai.zig");
 const gemini = @import("llm/gemini.zig");
+const proxy = @import("llm/proxy.zig");
 const ollama = @import("llm/ollama.zig");
 const shell = @import("tools/shell.zig");
 const confirm = @import("tools/confirm.zig");
@@ -214,6 +215,32 @@ pub const Agent = struct {
             };
             spinner.stop();
 
+            // Warn when any rate limit tier is at or below 20% remaining
+            if (response.rate_limit) |rl| {
+                const warn_burst = rl.limit_burst > 0 and rl.remaining_burst * 5 <= rl.limit_burst;
+                const warn_hourly = rl.limit_hourly > 0 and rl.remaining_hourly * 5 <= rl.limit_hourly;
+                const warn_daily = rl.limit_daily > 0 and rl.remaining_daily * 5 <= rl.limit_daily;
+
+                if (warn_burst or warn_hourly or warn_daily) {
+                    try self.stderr.writeAll("\x1b[33m[warning] rate limit:");
+                    var first = true;
+                    if (warn_burst) {
+                        try self.stderr.print(" {d}/{d} burst", .{ rl.remaining_burst, rl.limit_burst });
+                        first = false;
+                    }
+                    if (warn_hourly) {
+                        if (!first) try self.stderr.writeAll(" ·");
+                        try self.stderr.print(" {d}/{d} hourly", .{ rl.remaining_hourly, rl.limit_hourly });
+                        first = false;
+                    }
+                    if (warn_daily) {
+                        if (!first) try self.stderr.writeAll(" ·");
+                        try self.stderr.print(" {d}/{d} daily", .{ rl.remaining_daily, rl.limit_daily });
+                    }
+                    try self.stderr.writeAll(" remaining\x1b[0m\n");
+                }
+            }
+
             // Print any text content (thinking display)
             for (response.message.content) |block| {
                 switch (block) {
@@ -389,14 +416,13 @@ pub const Agent = struct {
 
     fn callLlm(self: *Agent) !provider.ChatResponse {
         return switch (self.cfg.provider) {
-            .proxy => gemini.chat(
+            .proxy => proxy.chat(
                 self.allocator,
-                null, // no API key — proxy injects it
                 self.cfg.proxy_model,
                 self.system_prompt,
                 self.messages.items,
                 &TOOLS,
-                self.cfg.proxy_url, // base_url = proxy endpoint
+                self.cfg.proxy_url,
             ),
             .anthropic => blk: {
                 const api_key = self.cfg.anthropic_api_key orelse return error.NoApiKey;
