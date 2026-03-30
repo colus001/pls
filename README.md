@@ -106,6 +106,27 @@ export OLLAMA_MODEL=llama3.2
 
 ## Usage
 
+### Quoting your task
+
+Quotes are **optional** for plain natural language. `pls` collects all non-flag arguments and joins them with spaces, so these two are identical:
+
+```bash
+pls 'show disk usage by directory'
+pls show disk usage by directory
+```
+
+You only need quotes when your task contains **shell special characters** that the shell would interpret before `pls` sees them:
+
+| Character | Example | Why quotes are needed |
+|-----------|---------|----------------------|
+| `!` | `pls 'fix this bug!'` | History expansion in bash |
+| `$` | `pls 'what is $HOME'` | Variable substitution |
+| `>` `<` `\|` | `pls 'write output > file'` | Redirection / pipes |
+| `(` `)` | `pls 'calculate (a+b)'` | Subshell execution |
+| `;` `&&` | `pls 'do this; then that'` | Command separators |
+
+When in doubt, wrapping in single quotes (`'...'`) is always safe.
+
 ```bash
 # Basic usage
 pls 'stop all processes using port 1380'
@@ -182,7 +203,7 @@ ollama_model = "llama3.1"
 
 ## Self-hosting the proxy
 
-The default free tier uses a hosted proxy at `pls-proxy.seokjun.kim`. You can self-host your own proxy to remove rate limits or use a different model.
+You can self-host your own proxy to remove rate limits or use a different model.
 
 ### Proxy protocol
 
@@ -205,9 +226,7 @@ The proxy's only responsibilities:
 
 ### Deploy your own
 
-A reference implementation using Cloudflare Workers is available at [colus001/pls-proxy](https://github.com/colus001/pls-proxy).
-
-Then configure `pls` to use your proxy:
+A reference implementation using Cloudflare Workers is available. Once deployed, configure `pls` to use your proxy:
 
 ```bash
 export PLS_PROXY_URL=https://your-proxy.example.com

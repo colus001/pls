@@ -174,6 +174,8 @@ pub const Agent = struct {
     allocator: Allocator,
     cfg: *const config_mod.Config,
     messages: std.ArrayList(provider.Message) = .empty,
+    /// Shell commands that were actually executed during this session.
+    executed_commands: std.ArrayList([]const u8) = .empty,
     options: AgentOptions,
     stderr: std.fs.File.DeprecatedWriter,
     system_prompt: []const u8,
@@ -195,6 +197,10 @@ pub const Agent = struct {
             msg.deinit(self.allocator);
         }
         self.messages.deinit(self.allocator);
+        for (self.executed_commands.items) |cmd| {
+            self.allocator.free(cmd);
+        }
+        self.executed_commands.deinit(self.allocator);
     }
 
     /// Run the agent with a user task.
@@ -391,6 +397,10 @@ pub const Agent = struct {
                     // Execute all commands sequentially and print output
                     try self.stderr.print("\n", .{});
                     for (shell_calls.items) |sc| {
+                        // Record this command in the session history
+                        const cmd_copy = try self.allocator.dupe(u8, sc.command);
+                        try self.executed_commands.append(self.allocator, cmd_copy);
+
                         var result = try shell.execute(self.allocator, sc.command);
                         defer result.deinit();
 

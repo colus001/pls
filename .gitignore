@@ -6,3 +6,7 @@ zig-out/
 /build-*/
 /docgen_tmp/
 .DS_Store
+*.a
+*.o
+*.so
+*.dylib
