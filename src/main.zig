@@ -6,6 +6,7 @@ const config_editor = @import("config_editor.zig");
 const history_mod = @import("history.zig");
 const build_info = @import("build_info");
 const http_client = @import("llm/http_client.zig");
+const updater = @import("updater.zig");
 
 const VERSION = build_info.version;
 
@@ -211,6 +212,9 @@ fn runTask(
         try stderr.writeAll("Run `pls init` to set up your configuration.\n");
         return;
     }
+
+    // Check for a newer release (best-effort, once per 24 h)
+    updater.checkForUpdates(allocator, stderr);
 
     // Capture timestamp and cwd before running the agent
     const session_timestamp = history_mod.currentTimestamp(allocator) catch null;
