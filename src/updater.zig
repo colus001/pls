@@ -65,12 +65,12 @@ fn checkForUpdatesInner(allocator: Allocator, stderr: anytype) !void {
     // This prevents hammering the API even when the user is offline.
     if (std.fs.openFileAbsolute(cache_path, .{ .mode = .write_only })) |f| {
         defer f.close();
-        f.writer().print("{d}\n", .{now_secs}) catch {};
+        f.deprecatedWriter().print("{d}\n", .{now_secs}) catch {};
     } else |_| {
         // Cache file doesn't exist yet — create it (dir must already exist).
         if (std.fs.createFileAbsolute(cache_path, .{})) |f| {
             defer f.close();
-            f.writer().print("{d}\n", .{now_secs}) catch {};
+            f.deprecatedWriter().print("{d}\n", .{now_secs}) catch {};
         } else |_| {}
     }
 
