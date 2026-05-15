@@ -489,7 +489,11 @@ fn runHistory(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !v
     const home = std.posix.getenv("HOME") orelse "";
 
     try stdout.writeByte('\n');
-    for (entries) |entry| {
+    var index = entries.len;
+    while (index > 0) {
+        index -= 1;
+        const entry = entries[index];
+
         // Display timestamp: "2026-03-30T14:23:00Z" -> "2026-03-30 14:23"
         var ts_buf = [_]u8{' '} ** 16;
         const ts_len = @min(entry.timestamp.len, 16);
