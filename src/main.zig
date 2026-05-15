@@ -488,8 +488,16 @@ fn runHistory(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !v
 
     const home = std.posix.getenv("HOME") orelse "";
 
+    try writeHistoryEntries(allocator, stdout, entries, home);
+}
+
+fn writeHistoryEntries(allocator: std.mem.Allocator, stdout: anytype, entries: []const history_mod.HistoryEntry, home: []const u8) !void {
     try stdout.writeByte('\n');
-    for (entries) |entry| {
+    var index = entries.len;
+    while (index > 0) {
+        index -= 1;
+        const entry = entries[index];
+
         // Display timestamp: "2026-03-30T14:23:00Z" -> "2026-03-30 14:23"
         var ts_buf = [_]u8{' '} ** 16;
         const ts_len = @min(entry.timestamp.len, 16);
@@ -646,4 +654,52 @@ fn printUsage(out: anytype) !void {
         \\    pls --provider openai --model gpt-4o 'explain this error'
         \\
     );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Tests
+// ──────────────────────────────────────────────────────────────────
+
+test "writeHistoryEntries displays newest entry last" {
+    const allocator = std.testing.allocator;
+
+    const no_commands = [_][]const u8{};
+    const entries = [_]history_mod.HistoryEntry{
+        .{
+            .timestamp = "2026-03-30T10:00:00Z",
+            .cwd = "/tmp",
+            .task = "newest",
+            .commands = &no_commands,
+        },
+        .{
+            .timestamp = "2026-03-30T09:00:00Z",
+            .cwd = "/tmp",
+            .task = "middle",
+            .commands = &no_commands,
+        },
+        .{
+            .timestamp = "2026-03-30T08:00:00Z",
+            .cwd = "/tmp",
+            .task = "oldest",
+            .commands = &no_commands,
+        },
+    };
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+
+    try writeHistoryEntries(allocator, output.writer(allocator), &entries, "");
+
+    const expected =
+        "\n" ++
+        "[2026-03-30 08:00] /tmp\n" ++
+        "  Task: oldest\n" ++
+        "\n" ++
+        "[2026-03-30 09:00] /tmp\n" ++
+        "  Task: middle\n" ++
+        "\n" ++
+        "[2026-03-30 10:00] /tmp\n" ++
+        "  Task: newest\n" ++
+        "\n";
+    try std.testing.expectEqualStrings(expected, output.items);
 }
