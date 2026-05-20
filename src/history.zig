@@ -24,6 +24,30 @@ pub fn freeEntry(allocator: Allocator, entry: HistoryEntry) void {
     allocator.free(entry.commands);
 }
 
+/// Return an 8-character content-based identifier for a history entry.
+pub fn entryShortId(entry: HistoryEntry) [8]u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(entry.timestamp);
+    hasher.update("\x00");
+    hasher.update(entry.cwd);
+    hasher.update("\x00");
+    hasher.update(entry.task);
+    for (entry.commands) |command| {
+        hasher.update("\x00");
+        hasher.update(command);
+    }
+
+    const short: u32 = @truncate(hasher.final());
+    const hex = "0123456789abcdef";
+    var id: [8]u8 = undefined;
+    for (0..id.len) |i| {
+        const shift: u5 = @intCast((id.len - 1 - i) * 4);
+        const nibble: usize = @intCast((short >> shift) & 0xf);
+        id[i] = hex[nibble];
+    }
+    return id;
+}
+
 /// Returns the path to the pls data directory.
 /// Uses $XDG_DATA_HOME/pls if set, otherwise ~/.local/share/pls.
 /// Caller owns the returned slice.
@@ -255,6 +279,66 @@ test "currentTimestamp returns valid ISO 8601 format" {
     try std.testing.expectEqual(@as(u8, ':'), ts[13]);
     try std.testing.expectEqual(@as(u8, ':'), ts[16]);
     try std.testing.expectEqual(@as(u8, 'Z'), ts[19]);
+}
+
+test "entryShortId is stable for identical content" {
+    const commands = [_][]const u8{ "zig fmt src/", "zig build test" };
+    const entry = HistoryEntry{
+        .timestamp = "2026-03-30T14:23:00Z",
+        .cwd = "/home/user/project",
+        .task = "verify changes",
+        .commands = &commands,
+    };
+
+    const first_id = entryShortId(entry);
+    const second_id = entryShortId(entry);
+    try std.testing.expectEqualStrings(&first_id, &second_id);
+}
+
+test "entryShortId includes timestamp cwd task and commands" {
+    const commands = [_][]const u8{"zig build test"};
+    const changed_commands = [_][]const u8{"zig build"};
+    const base = HistoryEntry{
+        .timestamp = "2026-03-30T14:23:00Z",
+        .cwd = "/home/user/project",
+        .task = "verify changes",
+        .commands = &commands,
+    };
+
+    const changed_timestamp = HistoryEntry{
+        .timestamp = "2026-03-30T14:24:00Z",
+        .cwd = base.cwd,
+        .task = base.task,
+        .commands = base.commands,
+    };
+    const changed_cwd = HistoryEntry{
+        .timestamp = base.timestamp,
+        .cwd = "/home/user/other",
+        .task = base.task,
+        .commands = base.commands,
+    };
+    const changed_task = HistoryEntry{
+        .timestamp = base.timestamp,
+        .cwd = base.cwd,
+        .task = "build project",
+        .commands = base.commands,
+    };
+    const changed_command = HistoryEntry{
+        .timestamp = base.timestamp,
+        .cwd = base.cwd,
+        .task = base.task,
+        .commands = &changed_commands,
+    };
+
+    const base_id = entryShortId(base);
+    const changed_timestamp_id = entryShortId(changed_timestamp);
+    const changed_cwd_id = entryShortId(changed_cwd);
+    const changed_task_id = entryShortId(changed_task);
+    const changed_command_id = entryShortId(changed_command);
+    try std.testing.expect(!std.mem.eql(u8, &base_id, &changed_timestamp_id));
+    try std.testing.expect(!std.mem.eql(u8, &base_id, &changed_cwd_id));
+    try std.testing.expect(!std.mem.eql(u8, &base_id, &changed_task_id));
+    try std.testing.expect(!std.mem.eql(u8, &base_id, &changed_command_id));
 }
 
 // ── parseEntry ────────────────────────────────────────────────────
