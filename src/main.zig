@@ -11,6 +11,8 @@ const updater = @import("updater.zig");
 const VERSION = build_info.version;
 
 const SPONSOR_URL = "https://github.com/sponsors/colus001";
+const HISTORY_DISPLAY_LIMIT = 20;
+const HISTORY_LOOKUP_LIMIT = 1000;
 
 fn printSponsorMessage(stderr: anytype) void {
     stderr.writeAll("\x1b[36m\xe2\x99\xa1 Support free proxy of pls: " ++ SPONSOR_URL ++ "\x1b[0m\n") catch {};
@@ -56,6 +58,21 @@ pub fn main() !void {
             try init_mod.runSetup(allocator);
             return;
         } else if (std.mem.eql(u8, arg, "history")) {
+            if (i + 1 < args.len) {
+                if (std.mem.eql(u8, args[i + 1], "rerun")) {
+                    if (i + 2 >= args.len) {
+                        try stderr.writeAll("Usage: pls history rerun <id>\n");
+                        return;
+                    }
+                    try runHistoryRerun(allocator, stderr, args[i + 2], confirm_mode_override, dry_run, provider_override, model_override, max_turns);
+                    return;
+                }
+
+                try stderr.print("Unknown history command: {s}\n", .{args[i + 1]});
+                try stderr.writeAll("Usage: pls history [rerun <id>]\n");
+                return;
+            }
+
             try runHistory(allocator, stdout, stderr);
             return;
         } else if (std.mem.eql(u8, arg, "usage") and i + 1 < args.len and std.mem.eql(u8, args[i + 1], "reset")) {
@@ -472,7 +489,7 @@ fn formatSeconds(allocator: std.mem.Allocator, secs: u64) ![]const u8 {
 }
 
 fn runHistory(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !void {
-    const entries = history_mod.loadEntries(allocator, 20) catch |err| {
+    const entries = history_mod.loadEntries(allocator, HISTORY_DISPLAY_LIMIT) catch |err| {
         try stderr.print("Error loading history: {}\n", .{err});
         return;
     };
@@ -489,6 +506,65 @@ fn runHistory(allocator: std.mem.Allocator, stdout: anytype, stderr: anytype) !v
     const home = std.posix.getenv("HOME") orelse "";
 
     try writeHistoryEntries(allocator, stdout, entries, home);
+}
+
+fn runHistoryRerun(
+    allocator: std.mem.Allocator,
+    stderr: std.fs.File.DeprecatedWriter,
+    id_prefix: []const u8,
+    confirm_mode_override: ?config_mod.ConfirmMode,
+    dry_run: bool,
+    provider_override: ?[]const u8,
+    model_override: ?[]const u8,
+    max_turns: usize,
+) !void {
+    const entries = history_mod.loadEntries(allocator, HISTORY_LOOKUP_LIMIT) catch |err| {
+        try stderr.print("Error loading history: {}\n", .{err});
+        return;
+    };
+    defer {
+        for (entries) |entry| history_mod.freeEntry(allocator, entry);
+        allocator.free(entries);
+    }
+
+    const entry_index = findHistoryEntryById(entries, id_prefix) catch |err| switch (err) {
+        error.AmbiguousHistoryId => {
+            try stderr.print("History id is ambiguous: {s}\n", .{id_prefix});
+            try stderr.writeAll("Use more characters from the id shown by `pls history`.\n");
+            return;
+        },
+    };
+
+    if (entry_index == null) {
+        try stderr.print("History entry not found: {s}\n", .{id_prefix});
+        return;
+    }
+
+    const entry = entries[entry_index.?];
+    var old_cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const old_cwd = std.posix.getcwd(&old_cwd_buf) catch std.posix.getenv("PWD") orelse ".";
+    std.posix.chdir(entry.cwd) catch |err| {
+        try stderr.print("Failed to enter history cwd `{s}`: {}\n", .{ entry.cwd, err });
+        return;
+    };
+    defer std.posix.chdir(old_cwd) catch {};
+
+    const id = history_mod.entryShortId(entry);
+    try stderr.print("Rerunning history {s} in {s}\n", .{ &id, entry.cwd });
+    try runTask(allocator, stderr, entry.task, confirm_mode_override, dry_run, provider_override, model_override, max_turns);
+}
+
+fn findHistoryEntryById(entries: []const history_mod.HistoryEntry, id_prefix: []const u8) !?usize {
+    if (id_prefix.len == 0 or id_prefix.len > 8) return null;
+
+    var match_index: ?usize = null;
+    for (entries, 0..) |entry, index| {
+        const id = history_mod.entryShortId(entry);
+        if (!std.mem.startsWith(u8, &id, id_prefix)) continue;
+        if (match_index != null) return error.AmbiguousHistoryId;
+        match_index = index;
+    }
+    return match_index;
 }
 
 fn writeHistoryEntries(allocator: std.mem.Allocator, stdout: anytype, entries: []const history_mod.HistoryEntry, home: []const u8) !void {
@@ -512,7 +588,8 @@ fn writeHistoryEntries(allocator: std.mem.Allocator, stdout: anytype, entries: [
             try allocator.dupe(u8, entry.cwd);
         defer allocator.free(display_cwd);
 
-        try stdout.print("[{s}] {s}\n", .{ ts_display, display_cwd });
+        const id = history_mod.entryShortId(entry);
+        try stdout.print("{s} [{s}] {s}\n", .{ &id, ts_display, display_cwd });
         try stdout.print("  Task: {s}\n", .{entry.task});
 
         if (entry.commands.len > 0) {
@@ -628,6 +705,7 @@ fn printUsage(out: anytype) !void {
         \\    pls <task>              Run a natural language task
         \\    pls init                Interactive setup wizard
         \\    pls history             Show recent task history
+        \\    pls history rerun <id>  Rerun a task from history
         \\    pls usage               Show proxy rate limit usage
         \\    pls config              Interactive config editor
         \\    pls config show         Show active configuration
@@ -690,16 +768,66 @@ test "writeHistoryEntries displays newest entry last" {
 
     try writeHistoryEntries(allocator, output.writer(allocator), &entries, "");
 
-    const expected =
+    const oldest_id = history_mod.entryShortId(entries[2]);
+    const middle_id = history_mod.entryShortId(entries[1]);
+    const newest_id = history_mod.entryShortId(entries[0]);
+    const expected = try std.fmt.allocPrint(
+        allocator,
         "\n" ++
-        "[2026-03-30 08:00] /tmp\n" ++
-        "  Task: oldest\n" ++
-        "\n" ++
-        "[2026-03-30 09:00] /tmp\n" ++
-        "  Task: middle\n" ++
-        "\n" ++
-        "[2026-03-30 10:00] /tmp\n" ++
-        "  Task: newest\n" ++
-        "\n";
+            "{s} [2026-03-30 08:00] /tmp\n" ++
+            "  Task: oldest\n" ++
+            "\n" ++
+            "{s} [2026-03-30 09:00] /tmp\n" ++
+            "  Task: middle\n" ++
+            "\n" ++
+            "{s} [2026-03-30 10:00] /tmp\n" ++
+            "  Task: newest\n" ++
+            "\n",
+        .{ &oldest_id, &middle_id, &newest_id },
+    );
+    defer allocator.free(expected);
     try std.testing.expectEqualStrings(expected, output.items);
+}
+
+test "findHistoryEntryById matches short id prefix" {
+    const no_commands = [_][]const u8{};
+    const entries = [_]history_mod.HistoryEntry{
+        .{
+            .timestamp = "2026-03-30T10:00:00Z",
+            .cwd = "/tmp",
+            .task = "newest",
+            .commands = &no_commands,
+        },
+        .{
+            .timestamp = "2026-03-30T09:00:00Z",
+            .cwd = "/tmp",
+            .task = "middle",
+            .commands = &no_commands,
+        },
+    };
+
+    const id = history_mod.entryShortId(entries[1]);
+    const found = try findHistoryEntryById(&entries, id[0..8]);
+    try std.testing.expectEqual(@as(?usize, 1), found);
+}
+
+test "findHistoryEntryById rejects ambiguous prefixes" {
+    const no_commands = [_][]const u8{};
+    const entries = [_]history_mod.HistoryEntry{
+        .{
+            .timestamp = "2026-03-30T10:00:00Z",
+            .cwd = "/tmp",
+            .task = "same",
+            .commands = &no_commands,
+        },
+        .{
+            .timestamp = "2026-03-30T10:00:00Z",
+            .cwd = "/tmp",
+            .task = "same",
+            .commands = &no_commands,
+        },
+    };
+
+    const id = history_mod.entryShortId(entries[0]);
+    try std.testing.expectError(error.AmbiguousHistoryId, findHistoryEntryById(&entries, id[0..8]));
 }
